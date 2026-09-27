@@ -28,6 +28,7 @@ jobs:
             lld \
             python3 \
             zlib1g-dev \
+            libblocksruntime-dev \
             git
 
       - name: Build Clang
