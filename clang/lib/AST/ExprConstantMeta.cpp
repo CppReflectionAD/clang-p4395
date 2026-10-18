@@ -873,6 +873,19 @@ static bool false_expression_of(APValue &Result, ASTContext &C,
                                 DiagFn Diagnoser, bool AllowInjection,
                                 QualType ResultTy, SourceRange Range,
                                 ArrayRef<Expr *> Args, Decl *ContainingDecl);
+static bool is_construct(APValue &Result, ASTContext &C, MetaActions &Meta,
+                         EvalFn Evaluator, DiagFn Diagnoser,
+                         bool AllowInjection, QualType ResultTy,
+                         SourceRange Range, ArrayRef<Expr *> Args,
+                         Decl *ContainingDecl);
+static bool is_prefix(APValue &Result, ASTContext &C, MetaActions &Meta,
+                      EvalFn Evaluator, DiagFn Diagnoser, bool AllowInjection,
+                      QualType ResultTy, SourceRange Range,
+                      ArrayRef<Expr *> Args, Decl *ContainingDecl);
+static bool is_postfix(APValue &Result, ASTContext &C, MetaActions &Meta,
+                       EvalFn Evaluator, DiagFn Diagnoser, bool AllowInjection,
+                       QualType ResultTy, SourceRange Range,
+                       ArrayRef<Expr *> Args, Decl *ContainingDecl);
 
 // Statement / function-body reflection metafunctions
 static bool body_of(APValue &Result, ASTContext &C, MetaActions &Meta,
@@ -917,6 +930,23 @@ static bool expression_of(APValue &Result, ASTContext &C, MetaActions &Meta,
                           EvalFn Evaluator, DiagFn Diagnoser, bool AllowInjection,
                           QualType ResultTy, SourceRange Range,
                           ArrayRef<Expr *> Args, Decl *ContainingDecl);
+static bool is_simple_declaration(APValue &Result, ASTContext &C,
+                                  MetaActions &Meta, EvalFn Evaluator,
+                                  DiagFn Diagnoser, bool AllowInjection,
+                                  QualType ResultTy, SourceRange Range,
+                                  ArrayRef<Expr *> Args, Decl *ContainingDecl);
+static bool get_begin_declarator_of(APValue &Result, ASTContext &C,
+                                    MetaActions &Meta, EvalFn Evaluator,
+                                    DiagFn Diagnoser, bool AllowInjection,
+                                    QualType ResultTy, SourceRange Range,
+                                    ArrayRef<Expr *> Args,
+                                    Decl *ContainingDecl);
+static bool get_next_declarator_of(APValue &Result, ASTContext &C,
+                                   MetaActions &Meta, EvalFn Evaluator,
+                                   DiagFn Diagnoser, bool AllowInjection,
+                                   QualType ResultTy, SourceRange Range,
+                                   ArrayRef<Expr *> Args,
+                                   Decl *ContainingDecl);
 
 // Control-flow statement reflection metafunctions (if/for/while/range-for)
 static bool init_statement_of(APValue &Result, ASTContext &C, MetaActions &Meta,
@@ -1143,6 +1173,18 @@ static constexpr Metafunction Metafunctions[] = {
   { Metafunction::MFRK_metaInfo, 1, 1, loop_body_of },
   { Metafunction::MFRK_metaInfo, 1, 1, range_init_of },
   { Metafunction::MFRK_metaInfo, 1, 1, loop_variable_of },
+
+  // Refined is_construct
+  { Metafunction::MFRK_bool, 1, 1, is_construct },
+
+  // Prefix/postfix increment-decrement discrimination
+  { Metafunction::MFRK_bool, 1, 1, is_prefix },
+  { Metafunction::MFRK_bool, 1, 1, is_postfix },
+
+  // Multi-declarator simple-declaration reflection
+  { Metafunction::MFRK_bool, 1, 1, is_simple_declaration },
+  { Metafunction::MFRK_metaInfo, 1, 1, get_begin_declarator_of },
+  { Metafunction::MFRK_metaInfo, 2, 2, get_next_declarator_of },
 };
 constexpr const unsigned NumMetafunctions = sizeof(Metafunctions) /
                                             sizeof(Metafunction);
@@ -7876,15 +7918,12 @@ bool expression_kind_of(APValue &Result, ASTContext &C, MetaActions &Meta,
     Kind = 1; // decl_ref
     break;
   case Stmt::BinaryOperatorClass:
-  case Stmt::CompoundAssignOperatorClass: {
-    auto *BO = cast<BinaryOperator>(E);
-    if (BO->getOpcode() == BO_Comma) {
-      Kind = 10; // comma
-    } else {
-      Kind = 2; // binary_op
-    }
+  case Stmt::CompoundAssignOperatorClass:
+    // Comma is a binary operator ([expr.comma], [over.binary.general]), not
+    // its own kind -- discriminate via expression_operator_of(e) == op_comma,
+    // the same way `=`/`+=` are discriminated from other binary operators.
+    Kind = 2; // binary_op
     break;
-  }
   case Stmt::UnaryOperatorClass:
     Kind = 3; // unary_op
     break;
@@ -7954,12 +7993,16 @@ bool expression_operator_of(APValue &Result, ASTContext &C, MetaActions &Meta,
   };
 
   // clang already knows the operator each opcode spells; use that instead of a
-  // hand-maintained opcode table.
+  // hand-maintained opcode table. `a + b` reports the same operator whether
+  // `+` is built-in (BinaryOperator) or overloaded (CXXOperatorCallExpr) --
+  // callers discriminate the two via is_function_call, not via this value.
   OverloadedOperatorKind OO = OO_None;
   if (auto *BO = dyn_cast<BinaryOperator>(E))
     OO = BinaryOperator::getOverloadedOperator(BO->getOpcode());
   else if (auto *UO = dyn_cast<UnaryOperator>(E))
     OO = UnaryOperator::getOverloadedOperator(UO->getOpcode());
+  else if (auto *OCE = dyn_cast<CXXOperatorCallExpr>(E))
+    OO = OCE->getOperator();
 
   size_t OpVal = 0;
   if (OO != OO_None) {
@@ -7970,6 +8013,47 @@ bool expression_operator_of(APValue &Result, ASTContext &C, MetaActions &Meta,
   }
 
   return SetAndSucceed(Result, APValue(C.MakeIntValue(OpVal, C.getSizeType())));
+}
+
+// Collect `E`'s operands -- the things being operated on, never the thing
+// being invoked. For a call (CallExpr/CXXMemberCallExpr/CXXOperatorCallExpr)
+// that means the arguments, excluding the callee itself (so `callee_of` is
+// the only way to get at it, and operand counts stay consistent between
+// built-in and overloaded operators); for an overloaded postfix `++`/`--`
+// it additionally excludes the synthesized dummy `int` argument ([over.inc])
+// that doesn't correspond to anything written in the source. For a
+// single-argument functional-notation construction (`Tensor(x)`, wrapped by
+// Clang as CXXFunctionalCastExpr<ConstructorConversion> around a
+// CXXConstructExpr -- see is_construct), this gives the constructor's own
+// arguments, not the construct node itself, so operands_of is consistent
+// regardless of whether is_construct's match needed to see through that
+// wrapper. Anything else falls back to a generic walk of `E`'s children.
+static void collectOperands(Expr *E, SmallVectorImpl<Expr *> &Out) {
+  if (auto *OCE = dyn_cast<CXXOperatorCallExpr>(E)) {
+    OverloadedOperatorKind OO = OCE->getOperator();
+    unsigned NumArgs = (OO == OO_PlusPlus || OO == OO_MinusMinus)
+                           ? std::min<unsigned>(OCE->getNumArgs(), 1)
+                           : OCE->getNumArgs();
+    for (unsigned I = 0; I < NumArgs; ++I)
+      Out.push_back(OCE->getArg(I));
+    return;
+  }
+  if (auto *CE = dyn_cast<CallExpr>(E)) {
+    for (Expr *Arg : CE->arguments())
+      Out.push_back(Arg);
+    return;
+  }
+  if (auto *FCE = dyn_cast<CXXFunctionalCastExpr>(E)) {
+    if (FCE->getCastKind() == CK_ConstructorConversion) {
+      if (auto *CtorE = dyn_cast<CXXConstructExpr>(FCE->getSubExpr())) {
+        collectOperands(CtorE, Out);
+        return;
+      }
+    }
+  }
+  for (auto *Child : E->children())
+    if (auto *ChildExpr = dyn_cast_or_null<Expr>(Child))
+      Out.push_back(ChildExpr);
 }
 
 bool get_begin_operand_of(APValue &Result, ASTContext &C, MetaActions &Meta,
@@ -7987,16 +8071,13 @@ bool get_begin_operand_of(APValue &Result, ASTContext &C, MetaActions &Meta,
 
   Expr *E = PeelTransparent(RV.getReflectedExpression());
 
-  // Return the first child expression, or a null reflection if none.
-  for (auto *Child : E->children()) {
-    if (auto *ChildExpr = dyn_cast_or_null<Expr>(Child)) {
-      APValue ChildRV(ReflectionKind::Expression, ChildExpr);
-      return SetAndSucceed(Result, ChildRV);
-    }
-  }
+  SmallVector<Expr *, 4> Operands;
+  collectOperands(E, Operands);
+  if (Operands.empty())
+    return SetAndSucceed(Result, APValue(ReflectionKind::Null, nullptr));
 
-  // No children — return null reflection.
-  return SetAndSucceed(Result, APValue(ReflectionKind::Null, nullptr));
+  return SetAndSucceed(Result,
+                       APValue(ReflectionKind::Expression, Operands.front()));
 }
 
 bool get_next_operand_of(APValue &Result, ASTContext &C, MetaActions &Meta,
@@ -8019,23 +8100,25 @@ bool get_next_operand_of(APValue &Result, ASTContext &C, MetaActions &Meta,
                       ? CurrentRV.getReflectedExpression()
                       : nullptr;
 
-  bool FoundCurrent = false;
-  for (auto *Child : Parent->children()) {
-    auto *ChildExpr = dyn_cast_or_null<Expr>(Child);
-    if (!ChildExpr)
-      continue;
-    if (FoundCurrent) {
-      APValue ChildRV(ReflectionKind::Expression, ChildExpr);
-      return SetAndSucceed(Result, ChildRV);
+  SmallVector<Expr *, 4> Operands;
+  collectOperands(Parent, Operands);
+
+  for (unsigned I = 0; I < Operands.size(); ++I) {
+    if (Operands[I] == Current) {
+      if (I + 1 < Operands.size())
+        return SetAndSucceed(
+            Result, APValue(ReflectionKind::Expression, Operands[I + 1]));
+      break;
     }
-    if (ChildExpr == Current)
-      FoundCurrent = true;
   }
 
-  // No more children — return null reflection.
+  // No more operands — return null reflection.
   return SetAndSucceed(Result, APValue(ReflectionKind::Null, nullptr));
 }
 
+// callee_of(e) -- always the raw callee expression, never resolved. Resolving
+// it to a declaration reuses is_id_expression + declaration_of, the same
+// path used to resolve any name; this never attempts that resolution itself.
 bool expression_callee_of(APValue &Result, ASTContext &C, MetaActions &Meta,
                           EvalFn Evaluator, DiagFn Diagnoser,
                           bool AllowInjection, QualType ResultTy,
@@ -8058,12 +8141,7 @@ bool expression_callee_of(APValue &Result, ASTContext &C, MetaActions &Meta,
   }
 
   Expr *Callee = CE->getCallee()->IgnoreImplicit();
-  if (auto *DRE = dyn_cast<DeclRefExpr>(Callee)) {
-    APValue DeclRV(ReflectionKind::Declaration, DRE->getDecl());
-    return SetAndSucceed(Result, DeclRV);
-  }
-
-  return SetAndSucceed(Result, APValue(ReflectionKind::Null, nullptr));
+  return SetAndSucceed(Result, APValue(ReflectionKind::Expression, Callee));
 }
 
 bool expression_declaration_of(APValue &Result, ASTContext &C,
@@ -8668,6 +8746,190 @@ bool loop_variable_of(APValue &Result, ASTContext &C, MetaActions &Meta,
   return SetAndSucceed(Result,
                        APValue(ReflectionKind::Declaration,
                                RFS->getLoopVariable()));
+}
+
+// is_construct(e) -- a genuine object construction: a bare CXXConstructExpr
+// (any argument count), or an explicit single-argument functional-notation
+// construction (`Tensor(x)`), which Clang represents as a
+// CXXFunctionalCastExpr<ConstructorConversion> wrapping a CXXConstructExpr --
+// see expr_kind 7's "cast" case above. Per [expr.type.conv]p2, the
+// single-argument case is *also* a conversion (is_conversion); the overlap is
+// deliberate. An implicit (unwritten) converting-constructor call is already
+// unwrapped to a bare CXXConstructExpr by the time PeelTransparent runs, so
+// it needs no special case here.
+bool is_construct(APValue &Result, ASTContext &C, MetaActions &Meta,
+                  EvalFn Evaluator, DiagFn Diagnoser, bool AllowInjection,
+                  QualType ResultTy, SourceRange Range, ArrayRef<Expr *> Args,
+                  Decl *ContainingDecl) {
+  APValue RV;
+  if (!Evaluator(RV, Args[0], true))
+    return true;
+
+  if (!RV.isReflectedExpression())
+    return SetAndSucceed(Result, makeBool(C, false));
+
+  Expr *E = PeelTransparent(RV.getReflectedExpression());
+  if (isa<CXXConstructExpr>(E))
+    return SetAndSucceed(Result, makeBool(C, true));
+
+  if (auto *FCE = dyn_cast<CXXFunctionalCastExpr>(E))
+    if (FCE->getCastKind() == CK_ConstructorConversion)
+      return SetAndSucceed(
+          Result, makeBool(C, isa<CXXConstructExpr>(FCE->getSubExpr())));
+
+  return SetAndSucceed(Result, makeBool(C, false));
+}
+
+// is_prefix(e) / is_postfix(e) -- discriminate `++x`/`--x` from `x++`/`x--`,
+// for both built-in (UnaryOperator) and overloaded (CXXOperatorCallExpr,
+// where the postfix form carries a synthesized dummy `int` second argument
+// per [over.inc]) increment/decrement operators. False for anything else.
+bool is_prefix(APValue &Result, ASTContext &C, MetaActions &Meta,
+               EvalFn Evaluator, DiagFn Diagnoser, bool AllowInjection,
+               QualType ResultTy, SourceRange Range, ArrayRef<Expr *> Args,
+               Decl *ContainingDecl) {
+  APValue RV;
+  if (!Evaluator(RV, Args[0], true))
+    return true;
+
+  if (!RV.isReflectedExpression())
+    return SetAndSucceed(Result, makeBool(C, false));
+
+  Expr *E = PeelTransparent(RV.getReflectedExpression());
+  if (auto *UO = dyn_cast<UnaryOperator>(E))
+    return SetAndSucceed(Result,
+                         makeBool(C, UO->isIncrementDecrementOp() &&
+                                         UO->isPrefix()));
+  if (auto *CE = dyn_cast<CXXOperatorCallExpr>(E)) {
+    OverloadedOperatorKind OO = CE->getOperator();
+    if (OO == OO_PlusPlus || OO == OO_MinusMinus)
+      return SetAndSucceed(Result, makeBool(C, CE->getNumArgs() == 1));
+  }
+  return SetAndSucceed(Result, makeBool(C, false));
+}
+
+bool is_postfix(APValue &Result, ASTContext &C, MetaActions &Meta,
+                EvalFn Evaluator, DiagFn Diagnoser, bool AllowInjection,
+                QualType ResultTy, SourceRange Range, ArrayRef<Expr *> Args,
+                Decl *ContainingDecl) {
+  APValue RV;
+  if (!Evaluator(RV, Args[0], true))
+    return true;
+
+  if (!RV.isReflectedExpression())
+    return SetAndSucceed(Result, makeBool(C, false));
+
+  Expr *E = PeelTransparent(RV.getReflectedExpression());
+  if (auto *UO = dyn_cast<UnaryOperator>(E))
+    return SetAndSucceed(Result,
+                         makeBool(C, UO->isIncrementDecrementOp() &&
+                                         UO->isPostfix()));
+  if (auto *CE = dyn_cast<CXXOperatorCallExpr>(E)) {
+    OverloadedOperatorKind OO = CE->getOperator();
+    if (OO == OO_PlusPlus || OO == OO_MinusMinus)
+      return SetAndSucceed(Result, makeBool(C, CE->getNumArgs() == 2));
+  }
+  return SetAndSucceed(Result, makeBool(C, false));
+}
+
+// is_simple_declaration(s) -- true iff `s` is a declaration-statement
+// ([stmt.dcl]) whose declared entities are all variables (the only shape
+// `declarators_of`/`initializers_of` know how to handle). False -- not a
+// diagnosed error -- for any of the other nine `block-declaration`
+// alternatives (asm, using, static_assert, alias, ...), since those have no
+// declarator/initializer shape at all.
+bool is_simple_declaration(APValue &Result, ASTContext &C, MetaActions &Meta,
+                           EvalFn Evaluator, DiagFn Diagnoser,
+                           bool AllowInjection, QualType ResultTy,
+                           SourceRange Range, ArrayRef<Expr *> Args,
+                           Decl *ContainingDecl) {
+  APValue RV;
+  if (!Evaluator(RV, Args[0], true))
+    return true;
+
+  if (!RV.isReflectedStatement())
+    return SetAndSucceed(Result, makeBool(C, false));
+
+  auto *DS = dyn_cast<DeclStmt>(RV.getReflectedStatement());
+  if (!DS)
+    return SetAndSucceed(Result, makeBool(C, false));
+
+  for (Decl *D : DS->decls())
+    if (!isa<VarDecl>(D))
+      return SetAndSucceed(Result, makeBool(C, false));
+
+  return SetAndSucceed(Result, makeBool(C, true));
+}
+
+// get_begin_declarator_of(s) / get_next_declarator_of(s, cur) -- walk the
+// declared variables of a simple-declaration statement, in the order they
+// appear (`int a, b = 5;` yields `a` then `b`). Caller is expected to have
+// checked is_simple_declaration first; non-variable declarations in the
+// group are skipped rather than diagnosed, matching the defensive style of
+// get_begin_operand_of/get_next_operand_of.
+bool get_begin_declarator_of(APValue &Result, ASTContext &C,
+                             MetaActions &Meta, EvalFn Evaluator,
+                             DiagFn Diagnoser, bool AllowInjection,
+                             QualType ResultTy, SourceRange Range,
+                             ArrayRef<Expr *> Args, Decl *ContainingDecl) {
+  APValue RV;
+  if (!Evaluator(RV, Args[0], true))
+    return true;
+
+  if (!RV.isReflectedStatement())
+    return DiagnoseReflectionKind(Diagnoser, Range, "a statement",
+                                  DescriptionOf(RV));
+
+  auto *DS = dyn_cast<DeclStmt>(RV.getReflectedStatement());
+  if (!DS) {
+    Diagnoser(Range.getBegin(), diag::metafn_expected_reflection_of)
+        << "a declaration statement" << Range;
+    return true;
+  }
+
+  for (Decl *D : DS->decls())
+    if (auto *VD = dyn_cast<VarDecl>(D))
+      return SetAndSucceed(Result, APValue(ReflectionKind::Declaration, VD));
+
+  return SetAndSucceed(Result, APValue(ReflectionKind::Null, nullptr));
+}
+
+bool get_next_declarator_of(APValue &Result, ASTContext &C,
+                            MetaActions &Meta, EvalFn Evaluator,
+                            DiagFn Diagnoser, bool AllowInjection,
+                            QualType ResultTy, SourceRange Range,
+                            ArrayRef<Expr *> Args, Decl *ContainingDecl) {
+  APValue ParentRV, CurrentRV;
+  if (!Evaluator(ParentRV, Args[0], true))
+    return true;
+  if (!Evaluator(CurrentRV, Args[1], true))
+    return true;
+
+  if (!ParentRV.isReflectedStatement())
+    return DiagnoseReflectionKind(Diagnoser, Range, "a statement",
+                                  DescriptionOf(ParentRV));
+
+  auto *DS = dyn_cast<DeclStmt>(ParentRV.getReflectedStatement());
+  if (!DS) {
+    Diagnoser(Range.getBegin(), diag::metafn_expected_reflection_of)
+        << "a declaration statement" << Range;
+    return true;
+  }
+
+  Decl *Current = CurrentRV.isReflectedDecl() ? CurrentRV.getReflectedDecl()
+                                               : nullptr;
+
+  bool FoundCurrent = false;
+  for (Decl *D : DS->decls()) {
+    if (!isa<VarDecl>(D))
+      continue;
+    if (FoundCurrent)
+      return SetAndSucceed(Result, APValue(ReflectionKind::Declaration, D));
+    if (D == Current)
+      FoundCurrent = true;
+  }
+
+  return SetAndSucceed(Result, APValue(ReflectionKind::Null, nullptr));
 }
 
 }  // end namespace clang

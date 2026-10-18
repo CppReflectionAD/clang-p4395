@@ -634,6 +634,20 @@ enum : unsigned {
   __metafn_loop_body_of,
   __metafn_range_init_of,
   __metafn_loop_variable_of,
+
+  // Refined is_construct (sees through a single-argument functional-notation
+  // CXXFunctionalCastExpr<ConstructorConversion> wrapper to the CXXConstructExpr
+  // underneath, so it overlaps correctly with is_conversion)
+  __metafn_is_construct,
+
+  // Prefix/postfix increment-decrement discrimination
+  __metafn_is_prefix,
+  __metafn_is_postfix,
+
+  // Multi-declarator simple-declaration reflection
+  __metafn_is_simple_declaration,
+  __metafn_get_begin_declarator_of,
+  __metafn_get_next_declarator_of,
 };
 
 consteval auto __workaround_expand_compiler_builtins(info type) -> info;
@@ -2379,40 +2393,24 @@ consteval bool is_literal(info r) {
          __metafunction(detail::__metafn_expression_kind_of, r) == 0;
 }
 
-consteval bool is_variable_reference(info r) {
+consteval bool is_id_expression(info r) {
   return is_expression(r) &&
          __metafunction(detail::__metafn_expression_kind_of, r) == 1;
 }
 
-consteval bool is_binary_operator(info r) {
+// Unified operator-expression predicate: true for binary and unary operators
+// (built-in or overloaded) alike, in both arities. Discriminate further with
+// `expression_operator_of` (which operator) and `operands_of().size()`
+// (arity: 1 = unary, 2 = binary).
+consteval bool is_operator_expression(info r) {
   return is_expression(r) &&
-         __metafunction(detail::__metafn_expression_kind_of, r) == 2;
-}
-
-consteval bool is_unary_operator(info r) {
-  return is_expression(r) &&
-         __metafunction(detail::__metafn_expression_kind_of, r) == 3;
+         (__metafunction(detail::__metafn_expression_kind_of, r) == 2 ||
+          __metafunction(detail::__metafn_expression_kind_of, r) == 3);
 }
 
 consteval bool is_function_call(info r) {
   return is_expression(r) &&
          __metafunction(detail::__metafn_expression_kind_of, r) == 4;
-}
-
-// A conditional (ternary) expression `c ? a : b`, or the GNU `c ?: b` form.
-consteval bool is_conditional_operator(info r) {
-  return is_expression(r) &&
-         __metafunction(detail::__metafn_expression_kind_of, r) == 6;
-}
-
-consteval bool is_cast(info r) {
-  return is_expression(r) &&
-         __metafunction(detail::__metafn_expression_kind_of, r) == 7;
-}
-
-consteval bool is_construct(info r) {
-  return is_expression(r) &&
-         __metafunction(detail::__metafn_expression_kind_of, r) == 8;
 }
 
 consteval auto operands_of(info r) -> vector<info> {
@@ -2423,6 +2421,48 @@ consteval auto operands_of(info r) -> vector<info> {
     child = __metafunction(detail::__metafn_get_next_operand_of, r, child);
   }
   return result;
+}
+
+// A conditional (ternary) expression `c ? a : b`, or the GNU `c ?: b` form.
+consteval bool is_conditional_operator(info r) {
+  return is_expression(r) &&
+         __metafunction(detail::__metafn_expression_kind_of, r) == 6;
+}
+
+// A value being transformed from one type to another: an implicit standard
+// conversion or explicit cast (kind 7), or a single-argument construction
+// (kind 8 with exactly one operand) -- per [expr.type.conv]p2, a parenthesized
+// single-expression functional-notation construction is "equivalent to the
+// corresponding cast expression", whether the compiler inserted it (e.g.
+// wrapping a class-typed return value) or the user wrote it (`Tensor(x)`).
+// Deliberately overlaps with `is_construct` in that single-argument case --
+// see is_construct below -- the same way `is_function_call` and
+// `is_operator_expression` overlap for an overloaded `operator+`.
+//
+// Note: this cannot yet distinguish a single parenthesized *expression*
+// argument from a single-element *braced-init-list* argument (`Tensor({x})`),
+// since braced-init-lists are not yet reflectable as expressions; both are
+// currently reported as conversions. Narrowing this is future work once
+// braced-init-list introspection exists.
+consteval bool is_conversion(info r) {
+  if (!is_expression(r)) return false;
+  auto kind = __metafunction(detail::__metafn_expression_kind_of, r);
+  if (kind == 7) return true;
+  if (kind == 8) return operands_of(r).size() == 1;
+  return false;
+}
+
+// An object construction: a functional-notation or braced-init-list
+// construction with zero, two, or more arguments, or exactly one
+// braced-init-list argument. Overlaps with `is_conversion` for a genuine
+// single-argument converting-constructor call (`Tensor(x)`) -- both are true
+// there, since a real constructor is invoked *and* the standard treats the
+// expression as a conversion; see is_conversion above. (Not a pure
+// expression_kind_of==8 check: Clang represents the single-argument
+// functional-notation case as a cast node wrapping the construct, so seeing
+// the overlap requires looking inside that wrapper.)
+consteval bool is_construct(info r) {
+  return __metafunction(detail::__metafn_is_construct, r);
 }
 
 consteval info callee_of(info r) {
@@ -2451,6 +2491,20 @@ consteval info true_expression_of(info r) {
 
 consteval info false_expression_of(info r) {
   return __metafunction(detail::__metafn_false_expression_of, r);
+}
+
+// Prefix (`++a`/`--a`) vs. postfix (`a++`/`a--`) discrimination, for both
+// built-in and overloaded increment/decrement operators alike.
+// `expression_operator_of` reports a single `op_plus_plus`/`op_minus_minus`
+// for both forms -- matching std::meta::operators, which has no separate
+// prefix/postfix enumerators -- so this is a dedicated, orthogonal accessor
+// rather than folded into the operator value.
+consteval bool is_prefix(info r) {
+  return __metafunction(detail::__metafn_is_prefix, r);
+}
+
+consteval bool is_postfix(info r) {
+  return __metafunction(detail::__metafn_is_postfix, r);
 }
 
 
@@ -2526,8 +2580,10 @@ consteval auto statements_of(info r) -> vector<info> {
   return result;
 }
 
-// The returned expression of a return statement.
-consteval info return_value_of(info r) {
+// The operand of a return statement: the returned expression, or (once
+// braced-init-list introspection exists) the braced-init-list itself for a
+// bare `return {...};`. Currently only the expression case is implemented.
+consteval info return_operand_of(info r) {
   return __metafunction(detail::__metafn_return_value_of, r);
 }
 
@@ -2540,6 +2596,38 @@ consteval info expression_of(info r) {
 // The variable declared by a single-variable declaration statement.
 consteval info declared_variable_of(info r) {
   return __metafunction(detail::__metafn_declared_variable_of, r);
+}
+
+// A declaration-statement ([stmt.dcl]) whose declared entities are all
+// variables -- the only one of block-declaration's ten grammar alternatives
+// (asm, using, static_assert, alias, ...) that has declarators/initializers
+// at all. Structured bindings are excluded for now: all the bound names
+// share one initializer rather than each having their own, so they don't
+// fit this one-declarator-one-initializer model.
+consteval bool is_simple_declaration(info r) {
+  return __metafunction(detail::__metafn_is_simple_declaration, r);
+}
+
+// The declared variables of a simple-declaration statement, in the order
+// they're written (`int a, b = 5;` -> {a, b}).
+consteval auto declarators_of(info r) -> vector<info> {
+  vector<info> result;
+  info child = __metafunction(detail::__metafn_get_begin_declarator_of, r);
+  while (child != info{}) {
+    result.push_back(child);
+    child = __metafunction(detail::__metafn_get_next_declarator_of, r, child);
+  }
+  return result;
+}
+
+// The initializer expressions of a simple-declaration statement's declared
+// variables, parallel to declarators_of (a null reflection where a
+// declarator has no initializer).
+consteval auto initializers_of(info r) -> vector<info> {
+  vector<info> result;
+  for (info d : declarators_of(r))
+    result.push_back(initializer_of(d));
+  return result;
 }
 
 // Role accessors for if/for/while/range-for statements. Each gives back a
