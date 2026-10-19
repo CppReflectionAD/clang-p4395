@@ -26,25 +26,30 @@ static_assert(!is_expression(^^int));
 // Expression classification predicates
 static_assert(is_literal(^^{ 42 }));
 static_assert(is_literal(^^{ 3.14 }));
-static_assert(!is_binary_operator(^^{ 42 }));
+static_assert(!is_operator_expression(^^{ 42 }));
 
 namespace test_decl_ref {
   int x = 0;
-  static_assert(is_variable_reference(^^{ x }));
+  static_assert(is_id_expression(^^{ x }));
   static_assert(!is_literal(^^{ x }));
 }
 
 namespace test_binary_op {
   int a = 1, b = 2;
-  static_assert(is_binary_operator(^^{ a + b }));
-  static_assert(is_binary_operator(^^{ a * b }));
-  static_assert(!is_unary_operator(^^{ a + b }));
+  static_assert(is_operator_expression(^^{ a + b }) &&
+                operands_of(^^{ a + b }).size() == 2);
+  static_assert(is_operator_expression(^^{ a * b }) &&
+                operands_of(^^{ a * b }).size() == 2);
+  static_assert(!(is_operator_expression(^^{ a + b }) &&
+                  operands_of(^^{ a + b }).size() == 1));
 }
 
 namespace test_unary_op {
   int x = 1;
-  static_assert(is_unary_operator(^^{ -x }));
-  static_assert(!is_binary_operator(^^{ -x }));
+  static_assert(is_operator_expression(^^{ -x }) &&
+                operands_of(^^{ -x }).size() == 1);
+  static_assert(!(is_operator_expression(^^{ -x }) &&
+                  operands_of(^^{ -x }).size() == 2));
 }
 
 namespace test_call {
@@ -69,16 +74,16 @@ namespace test_declaration_of {
 //     inline so the vector stays transient within each constant expression.
 //  2. The captured AST includes implicit conversions: the operands of `a + b`
 //     are lvalue-to-rvalue ImplicitCastExpr nodes wrapping the decl_refs, so
-//     the operand is a cast. Strip the cast (its single operand) to reach
-//     the underlying variable reference, as real pattern-matching code must.
+//     the operand is a conversion. Strip it (its single operand) to reach
+//     the underlying id-expression, as real pattern-matching code must.
 namespace test_operands {
   int a = 1, b = 2;
   static_assert(operands_of(^^{ a + b }).size() == 2);
-  static_assert(is_cast(operands_of(^^{ a + b })[0]));
+  static_assert(is_conversion(operands_of(^^{ a + b })[0]));
   static_assert(
-      is_variable_reference(operands_of(operands_of(^^{ a + b })[0])[0]));
+      is_id_expression(operands_of(operands_of(^^{ a + b })[0])[0]));
   static_assert(
-      is_variable_reference(operands_of(operands_of(^^{ a + b })[1])[0]));
+      is_id_expression(operands_of(operands_of(^^{ a + b })[1])[0]));
   static_assert(declaration_of(operands_of(operands_of(^^{ a + b })[0])[0]) ==
                 ^^a);
   static_assert(declaration_of(operands_of(operands_of(^^{ a + b })[1])[0]) ==
