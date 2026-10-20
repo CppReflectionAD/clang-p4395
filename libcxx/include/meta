@@ -2398,14 +2398,62 @@ consteval bool is_id_expression(info r) {
          __metafunction(detail::__metafn_expression_kind_of, r) == 1;
 }
 
-// Unified operator-expression predicate: true for binary and unary operators
-// (built-in or overloaded) alike, in both arities. Discriminate further with
+// Unified operator-expression predicate: true for binary and unary operators,
+// built-in or overloaded alike, in both arities. An overloaded `a + b` is a
+// CXXOperatorCallExpr -- kind 4 (call) -- so this deliberately overlaps with
+// `is_function_call`; both are true for it, same as `is_literal`/`is_id_expression`
+// etc. can overlap elsewhere. Operators that happen to be spelled via
+// CXXOperatorCallExpr but aren't operator-expressions in the arithmetic/logical
+// sense (operator(), operator[], operator->, operator->*, allocation functions,
+// operator co_await) are excluded, since their arity and meaning don't match
+// the unary/binary operator model. Discriminate further with
 // `expression_operator_of` (which operator) and `operands_of().size()`
 // (arity: 1 = unary, 2 = binary).
 consteval bool is_operator_expression(info r) {
-  return is_expression(r) &&
-         (__metafunction(detail::__metafn_expression_kind_of, r) == 2 ||
-          __metafunction(detail::__metafn_expression_kind_of, r) == 3);
+  if (!is_expression(r)) return false;
+  auto kind = __metafunction(detail::__metafn_expression_kind_of, r);
+  if (kind == 2 || kind == 3) return true;
+  if (kind != 4) return false;
+  switch (operators(__metafunction(detail::__metafn_expression_operator_of, r))) {
+  case operators::op_tilde:
+  case operators::op_exclamation:
+  case operators::op_plus:
+  case operators::op_minus:
+  case operators::op_star:
+  case operators::op_slash:
+  case operators::op_percent:
+  case operators::op_caret:
+  case operators::op_ampersand:
+  case operators::op_pipe:
+  case operators::op_equals:
+  case operators::op_plus_equals:
+  case operators::op_minus_equals:
+  case operators::op_star_equals:
+  case operators::op_slash_equals:
+  case operators::op_percent_equals:
+  case operators::op_caret_equals:
+  case operators::op_ampersand_equals:
+  case operators::op_pipe_equals:
+  case operators::op_equals_equals:
+  case operators::op_exclamation_equals:
+  case operators::op_less:
+  case operators::op_greater:
+  case operators::op_less_equals:
+  case operators::op_greater_equals:
+  case operators::op_spaceship:
+  case operators::op_ampersand_ampersand:
+  case operators::op_pipe_pipe:
+  case operators::op_less_less:
+  case operators::op_greater_greater:
+  case operators::op_less_less_equals:
+  case operators::op_greater_greater_equals:
+  case operators::op_plus_plus:
+  case operators::op_minus_minus:
+  case operators::op_comma:
+    return true;
+  default:
+    return false;
+  }
 }
 
 consteval bool is_function_call(info r) {
@@ -2436,8 +2484,7 @@ consteval bool is_conditional_operator(info r) {
 // corresponding cast expression", whether the compiler inserted it (e.g.
 // wrapping a class-typed return value) or the user wrote it (`Tensor(x)`).
 // Deliberately overlaps with `is_construct` in that single-argument case --
-// see is_construct below -- the same way `is_function_call` and
-// `is_operator_expression` overlap for an overloaded `operator+`.
+// see is_construct below.
 //
 // Note: this cannot yet distinguish a single parenthesized *expression*
 // argument from a single-element *braced-init-list* argument (`Tensor({x})`),
