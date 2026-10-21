@@ -27,7 +27,7 @@ namespace test_kind {
   bool c = true;
   static_assert(is_expression(^^{ c ? a : b }));
   static_assert(is_conditional_operator(^^{ c ? a : b }));
-  static_assert(!is_binary_operator(^^{ c ? a : b }));
+  static_assert(!is_operator_expression(^^{ c ? a : b }));
   static_assert(!is_conditional_operator(^^{ a + b }));
   static_assert(!is_conditional_operator(^^int));
 }
@@ -38,10 +38,10 @@ namespace test_kind {
 namespace test_accessors {
   int a = 1, b = 2;
   bool c = true;
-  static_assert(is_cast(condition_of(^^{ c ? a : b })));
+  static_assert(is_conversion(condition_of(^^{ c ? a : b })));
   static_assert(declaration_of(operands_of(condition_of(^^{ c ? a : b }))[0]) ==
                 ^^c);
-  static_assert(is_variable_reference(true_expression_of(^^{ c ? a : b })));
+  static_assert(is_id_expression(true_expression_of(^^{ c ? a : b })));
   static_assert(declaration_of(true_expression_of(^^{ c ? a : b })) == ^^a);
   static_assert(declaration_of(false_expression_of(^^{ c ? a : b })) == ^^b);
 }
@@ -79,13 +79,13 @@ namespace test_gnu_form {
 namespace test_in_body {
   constexpr double f(double x, double y) { return x > y ? x - y : y - x; }
   static_assert(is_conditional_operator(
-      return_value_of(statements_of(body_of(^^f))[0])));
+      return_operand_of(statements_of(body_of(^^f))[0])));
   static_assert(expression_operator_of(condition_of(
-      return_value_of(statements_of(body_of(^^f))[0]))) == operators::op_greater);
+      return_operand_of(statements_of(body_of(^^f))[0]))) == operators::op_greater);
   static_assert(expression_operator_of(true_expression_of(
-      return_value_of(statements_of(body_of(^^f))[0]))) == operators::op_minus);
+      return_operand_of(statements_of(body_of(^^f))[0]))) == operators::op_minus);
   static_assert(expression_operator_of(false_expression_of(
-      return_value_of(statements_of(body_of(^^f))[0]))) == operators::op_minus);
+      return_operand_of(statements_of(body_of(^^f))[0]))) == operators::op_minus);
 }
 
 // Splice: a reflected ternary still evaluates.
