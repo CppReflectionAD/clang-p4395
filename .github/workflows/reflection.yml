@@ -2,7 +2,7 @@ name: Test Reflection in Clang
 
 on:
   push:
-    branches: [ "p2996", "ci" ]
+    branches: [ "p4395" ]
   pull_request:
   workflow_dispatch:
 
