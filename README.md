@@ -5,6 +5,22 @@ https://github.com/llvm/llvm-project) implementing experimental support for ISO
 C++ proposal [P2996](https://wg21.link/p2996) in `clang`. Please see [P2996.md](
 P2996.md) for more about this project.
 
+## CppReflectionAD/clang-p4395
+
+This fork's `p4395` branch adds expression reflection, the C++ proposal P4395
+(`body_of`, `statements_of`, `operands_of`, ...), to Clang/P2996.
+[cpp_reflection_ad](https://github.com/CppReflectionAD/cpp_reflection_ad)
+builds and tests with it, and it is on [Compiler Explorer](https://godbolt.org/)
+as **x86-64 clang (expr-reflect)**.
+
+This repository has issues turned off. Report a bug in the reflection support
+as an
+[issue in cpp_reflection_ad](https://github.com/CppReflectionAD/cpp_reflection_ad/issues/new),
+with a small reproducer. Bugs in the forks are tracked there under the
+[`CompilerGap`](https://github.com/CppReflectionAD/cpp_reflection_ad/issues?q=label%3ACompilerGap)
+label. A fix is a pull request into `p4395`, merged with a merge commit (see
+[Bumping a compiler pin](https://github.com/CppReflectionAD/cpp_reflection_ad/blob/main/CONTRIBUTING.md#bumping-a-compiler-pin)).
+
 # The LLVM Compiler Infrastructure
 
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/llvm/llvm-project/badge)](https://securityscorecards.dev/viewer/?uri=github.com/llvm/llvm-project)
