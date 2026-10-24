@@ -64,8 +64,8 @@ namespace test_decl {
 }
 
 // Expression-statement children come back as *statement* reflections (uniform
-// statement model), classified by is_expression_statement. (<meta> has no
-// public accessor from an expression statement to its expression.)
+// statement model), classified by is_expression_statement; expression_of
+// bridges to the underlying expression.
 namespace test_expr_child {
   constexpr double g(double x) {
     x = x + 1.0;    // assignment expression statement
@@ -77,6 +77,17 @@ namespace test_expr_child {
   static_assert(!is_expression(statements_of(body_of(^^g))[0]));
   static_assert(is_expression_statement(statements_of(body_of(^^g))[0]));
   static_assert(!is_declaration_statement(statements_of(body_of(^^g))[0]));
+
+  // expression_of -> the assignment `x = x + 1.0`, whose RHS is `x + 1.0`.
+  constexpr auto e = expression_of(statements_of(body_of(^^g))[0]);
+  static_assert(is_expression(e));
+  static_assert(!is_statement(e));
+  static_assert(is_operator_expression(e) && operands_of(e).size() == 2);
+  static_assert(expression_operator_of(e) == operators::op_equals);
+  static_assert(is_operator_expression(operands_of(e)[1]) &&
+                operands_of(operands_of(e)[1]).size() == 2);
+  static_assert(expression_operator_of(operands_of(e)[1]) ==
+                operators::op_plus);
 }
 
 // --- if statements ---------------------------------------------------------
