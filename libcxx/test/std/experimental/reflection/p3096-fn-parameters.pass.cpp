@@ -302,6 +302,37 @@ consteval int fn(int p) {
 
 static_assert(fn(42) == 42);
 
+// Extension: variable_of also works outside the function's body.
+static_assert(is_variable(variable_of(parameters_of(^^fn)[0])));
+static_assert(type_of(variable_of(parameters_of(^^fn)[0])) == ^^int);
+
+// The result is the variable that a use of the parameter in the body names,
+// even when the function was declared before its definition.
+consteval std::meta::info first_use(std::meta::info f) {
+  std::meta::info e = return_operand_of(statements_of(body_of(f))[0]);
+  while (!is_id_expression(e))
+    e = operands_of(e)[0];
+  return declaration_of(e);
+}
+
+int redeclared(int a, int b);
+int redeclared(int a, int b) { return a * b; }
+static_assert(variable_of(parameters_of(^^redeclared)[0]) ==
+              first_use(^^redeclared));
+static_assert(variable_of(parameters_of(^^redeclared)[1]) !=
+              first_use(^^redeclared));
+
+// Each element of an expanded pack has its own (unnamed) variable, including
+// in a specialization nothing has instantiated yet.
+template <typename... Ts> int pack(Ts... xs) { return (xs + ...); }
+constexpr auto pack_params = std::define_static_array(
+    parameters_of(^^pack<int, long, int>));
+static_assert(pack_params.size() == 3);
+static_assert(variable_of(pack_params[0]) != variable_of(pack_params[1]));
+static_assert(variable_of(pack_params[0]) != variable_of(pack_params[2]));
+static_assert(type_of(variable_of(pack_params[1])) == ^^long);
+static_assert(variable_of(pack_params[0]) == first_use(^^pack<int, long, int>));
+
 }  // namespace variable_of_tests
 
 int main() { }
