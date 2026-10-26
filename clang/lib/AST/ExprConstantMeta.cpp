@@ -6997,16 +6997,17 @@ bool variable_of(APValue &Result, ASTContext &C, MetaActions &Meta,
   ParmVarDecl *PVD = RV.getReflectedParameter();
   FunctionDecl *FD = cast<FunctionDecl>(PVD->getDeclContext());
 
-  Decl *EvaluationContext = ContainingDecl ? ContainingDecl : Meta.CurrentCtx();
-  FunctionDecl *EvaluationFunction = dyn_cast<FunctionDecl>(EvaluationContext);
-  if (!EvaluationFunction)
-    EvaluationFunction =
-        dyn_cast_or_null<FunctionDecl>(EvaluationContext->getDeclContext());
-  if (!EvaluationFunction || EvaluationFunction->getCanonicalDecl() !=
-                                 FD->getCanonicalDecl())
+  // Unlike P3096, this works outside F's body too, which lets code that
+  // reflects F's body match a use of a parameter against parameters_of(F).
+  // Splicing the result outside F is still rejected, as for any local of F.
+  Meta.EnsureInstantiated(FD, Range);
+  FunctionDecl *Def = FD->getDefinition();
+  if (!Def) {
+    Diagnoser(Range.getBegin(), diag::metafn_expected_reflection_of)
+        << "a parameter of a function with a definition" << Range;
     return true;
-  assert(FD->getDefinition());
-  PVD = FD->getDefinition()->getParamDecl(PVD->getFunctionScopeIndex());
+  }
+  PVD = Def->getParamDecl(PVD->getFunctionScopeIndex());
 
   APValue Var(ReflectionKind::Declaration, PVD);
   return SetAndSucceed(Result, Var);
