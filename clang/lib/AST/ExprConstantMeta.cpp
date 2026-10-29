@@ -947,6 +947,10 @@ static bool get_next_declarator_of(APValue &Result, ASTContext &C,
                                    QualType ResultTy, SourceRange Range,
                                    ArrayRef<Expr *> Args,
                                    Decl *ContainingDecl);
+static bool has_body(APValue &Result, ASTContext &C, MetaActions &Meta,
+                     EvalFn Evaluator, DiagFn Diagnoser, bool AllowInjection,
+                     QualType ResultTy, SourceRange Range,
+                     ArrayRef<Expr *> Args, Decl *ContainingDecl);
 
 // Control-flow statement reflection metafunctions (if/for/while/range-for)
 static bool init_statement_of(APValue &Result, ASTContext &C, MetaActions &Meta,
@@ -1185,6 +1189,9 @@ static constexpr Metafunction Metafunctions[] = {
   { Metafunction::MFRK_bool, 1, 1, is_simple_declaration },
   { Metafunction::MFRK_metaInfo, 1, 1, get_begin_declarator_of },
   { Metafunction::MFRK_metaInfo, 2, 2, get_next_declarator_of },
+
+  // Whether body_of applies (P4395R0 section 3.1)
+  { Metafunction::MFRK_bool, 1, 1, has_body },
 };
 constexpr const unsigned NumMetafunctions = sizeof(Metafunctions) /
                                             sizeof(Metafunction);
@@ -8295,6 +8302,27 @@ bool false_expression_of(APValue &Result, ASTContext &C, MetaActions &Meta,
 // Statement / function-body reflection metafunctions
 // ---------------------------------------------------------------------------
 
+// The body of FD, instantiating FD first if it's a template specialization.
+// Null when FD isn't defined, or is defined as deleted or defaulted: then no
+// body was written to reflect.
+static Stmt *ReflectableBodyOf(MetaActions &Meta, FunctionDecl *FD,
+                               SourceRange Range) {
+  // Instantiating a specialization of a template that isn't defined is an
+  // error, where this asks only whether there is a body.
+  if (FD->isTemplateInstantiation() && !FD->isDefined()) {
+    const FunctionDecl *Pattern = FD->getTemplateInstantiationPattern();
+    if (!Pattern || !Pattern->isDefined())
+      return nullptr;
+  }
+  Meta.EnsureInstantiated(FD, Range);
+
+  const FunctionDecl *Def = nullptr;
+  Stmt *Body = FD->getBody(Def);
+  if (!Body || Def->isDeleted() || Def->isDefaulted())
+    return nullptr;
+  return Body;
+}
+
 // body_of(^^fn) -> reflection of the function's body (a CompoundStmt).
 bool body_of(APValue &Result, ASTContext &C, MetaActions &Meta,
              EvalFn Evaluator, DiagFn Diagnoser, bool AllowInjection,
@@ -8315,10 +8343,7 @@ bool body_of(APValue &Result, ASTContext &C, MetaActions &Meta,
     return DiagnoseReflectionKind(Diagnoser, Range, "a function",
                                   DescriptionOf(RV));
 
-  // Ensure the definition is available before asking for the body.
-  Meta.EnsureInstantiated(FD, Range);
-
-  Stmt *Body = FD->getBody();
+  Stmt *Body = ReflectableBodyOf(Meta, FD, Range);
   if (!Body) {
     Diagnoser(Range.getBegin(), diag::metafn_expected_reflection_of)
         << "a function with a definition" << Range;
@@ -8326,6 +8351,25 @@ bool body_of(APValue &Result, ASTContext &C, MetaActions &Meta,
   }
 
   return SetAndSucceed(Result, APValue(ReflectionKind::Statement, Body));
+}
+
+// has_body(r) -- whether body_of(r) applies: false, not a diagnosed error,
+// for anything but a function with a body.
+bool has_body(APValue &Result, ASTContext &C, MetaActions &Meta,
+              EvalFn Evaluator, DiagFn Diagnoser, bool AllowInjection,
+              QualType ResultTy, SourceRange Range, ArrayRef<Expr *> Args,
+              Decl *ContainingDecl) {
+  APValue RV;
+  if (!Evaluator(RV, Args[0], true))
+    return true;
+
+  RV = MaybeUnproxy(C, RV);
+
+  auto *FD = RV.isReflectedDecl()
+                 ? dyn_cast<FunctionDecl>(RV.getReflectedDecl())
+                 : nullptr;
+  return SetAndSucceed(
+      Result, makeBool(C, FD && ReflectableBodyOf(Meta, FD, Range)));
 }
 
 bool is_statement(APValue &Result, ASTContext &C, MetaActions &Meta,

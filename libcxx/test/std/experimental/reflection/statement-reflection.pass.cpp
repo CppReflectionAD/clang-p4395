@@ -332,5 +332,37 @@ namespace test_not_simple_declaration {
       statements_of(body_of(^^test_expr_child::g))[0]));
 }
 
+// --- has_body --------------------------------------------------------------
+
+// has_body is true exactly where body_of applies: for a function defined
+// with a body, instantiating a template specialization first.
+namespace test_has_body {
+  double defined(double x) { return x; }
+  double declared_only(double x);
+  double deleted(double) = delete;
+  struct S {
+    double v;
+    bool operator==(const S&) const = default;
+  };
+  template <typename T> T tmpl(T x) { return x; }
+  template <typename T> T declared_tmpl(T x);
+  int var;
+
+  static_assert(has_body(^^defined));
+  static_assert(is_compound_statement(body_of(^^defined)));
+  static_assert(!has_body(^^declared_only));
+  static_assert(!has_body(^^deleted));
+  static_assert(!has_body(^^S::operator==));
+  static_assert(has_body(^^tmpl<double>));
+  static_assert(is_compound_statement(body_of(^^tmpl<float>)));
+  static_assert(!has_body(^^declared_tmpl<double>));
+  // Not a function: a template, a variable, a type, a statement, null.
+  static_assert(!has_body(^^tmpl));
+  static_assert(!has_body(^^var));
+  static_assert(!has_body(^^S));
+  static_assert(!has_body(body_of(^^defined)));
+  static_assert(!has_body(info{}));
+}
+
 
 int main() {}
