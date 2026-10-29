@@ -8832,12 +8832,20 @@ bool is_postfix(APValue &Result, ASTContext &C, MetaActions &Meta,
   return SetAndSucceed(Result, makeBool(C, false));
 }
 
+// Whether D is one of the variables a simple declaration declares. A
+// structured binding declaration is a VarDecl too, but its names share one
+// initializer, so it doesn't fit the one-declarator-one-initializer shape.
+static bool IsSimpleDeclarator(const Decl *D) {
+  return isa<VarDecl>(D) && !isa<DecompositionDecl>(D);
+}
+
 // is_simple_declaration(s) -- true iff `s` is a declaration-statement
 // ([stmt.dcl]) whose declared entities are all variables (the only shape
 // `declarators_of`/`initializers_of` know how to handle). False -- not a
 // diagnosed error -- for any of the other nine `block-declaration`
 // alternatives (asm, using, static_assert, alias, ...), since those have no
-// declarator/initializer shape at all.
+// declarator/initializer shape at all, and for a structured binding
+// declaration.
 bool is_simple_declaration(APValue &Result, ASTContext &C, MetaActions &Meta,
                            EvalFn Evaluator, DiagFn Diagnoser,
                            bool AllowInjection, QualType ResultTy,
@@ -8855,7 +8863,7 @@ bool is_simple_declaration(APValue &Result, ASTContext &C, MetaActions &Meta,
     return SetAndSucceed(Result, makeBool(C, false));
 
   for (Decl *D : DS->decls())
-    if (!isa<VarDecl>(D))
+    if (!IsSimpleDeclarator(D))
       return SetAndSucceed(Result, makeBool(C, false));
 
   return SetAndSucceed(Result, makeBool(C, true));
@@ -8865,7 +8873,8 @@ bool is_simple_declaration(APValue &Result, ASTContext &C, MetaActions &Meta,
 // declared variables of a simple-declaration statement, in the order they
 // appear (`int a, b = 5;` yields `a` then `b`). Caller is expected to have
 // checked is_simple_declaration first; non-variable declarations in the
-// group are skipped rather than diagnosed, matching the defensive style of
+// group, and a structured binding declaration, are skipped rather than
+// diagnosed, matching the defensive style of
 // get_begin_operand_of/get_next_operand_of.
 bool get_begin_declarator_of(APValue &Result, ASTContext &C,
                              MetaActions &Meta, EvalFn Evaluator,
@@ -8888,8 +8897,8 @@ bool get_begin_declarator_of(APValue &Result, ASTContext &C,
   }
 
   for (Decl *D : DS->decls())
-    if (auto *VD = dyn_cast<VarDecl>(D))
-      return SetAndSucceed(Result, APValue(ReflectionKind::Declaration, VD));
+    if (IsSimpleDeclarator(D))
+      return SetAndSucceed(Result, APValue(ReflectionKind::Declaration, D));
 
   return SetAndSucceed(Result, APValue(ReflectionKind::Null, nullptr));
 }
@@ -8921,7 +8930,7 @@ bool get_next_declarator_of(APValue &Result, ASTContext &C,
 
   bool FoundCurrent = false;
   for (Decl *D : DS->decls()) {
-    if (!isa<VarDecl>(D))
+    if (!IsSimpleDeclarator(D))
       continue;
     if (FoundCurrent)
       return SetAndSucceed(Result, APValue(ReflectionKind::Declaration, D));
