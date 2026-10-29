@@ -648,6 +648,9 @@ enum : unsigned {
   __metafn_is_simple_declaration,
   __metafn_get_begin_declarator_of,
   __metafn_get_next_declarator_of,
+
+  // Whether body_of applies (P4395R0 section 3.1)
+  __metafn_has_body,
 };
 
 consteval auto __workaround_expand_compiler_builtins(info type) -> info;
@@ -2526,6 +2529,12 @@ consteval info initializer_of(info r) {
 // =============================================================================
 // Statement / function-body reflection API
 // =============================================================================
+
+// Whether fn reflects a function with a body for body_of to reflect: one
+// that is defined, and not as deleted or defaulted.
+consteval bool has_body(info fn) {
+  return __metafunction(detail::__metafn_has_body, fn);
+}
 
 // Reflect the body (a compound statement) of a reflected function.
 consteval info body_of(info fn) {

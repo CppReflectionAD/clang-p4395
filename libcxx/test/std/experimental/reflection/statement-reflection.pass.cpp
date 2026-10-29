@@ -288,4 +288,81 @@ namespace test_rangefor_unbraced {
 }
 
 
+// --- simple declarations ---------------------------------------------------
+
+// A declaration of variables is simple; declarators_of lists them in order.
+namespace test_simple_declaration {
+  constexpr double f(double x) {
+    double a = x, b;
+    b = a;
+    return b;
+  }
+  constexpr info s = statements_of(body_of(^^f))[0];
+  static_assert(is_simple_declaration(s));
+  static_assert(declarators_of(s).size() == 2);
+  static_assert(identifier_of(declarators_of(s)[0]) == "a");
+  static_assert(identifier_of(declarators_of(s)[1]) == "b");
+  static_assert(initializers_of(s)[1] == info{});
+}
+
+// An alias declaration and a structured binding declaration are declaration
+// statements that aren't simple: an alias declares no variable, and the
+// names of a binding share one initializer.
+namespace test_not_simple_declaration {
+  struct P {
+    double a, b;
+  };
+  constexpr double f(P p) {
+    using D = double;
+    auto [a, b] = p;
+    return D(a + b);
+  }
+  constexpr info alias = statements_of(body_of(^^f))[0];
+  static_assert(is_declaration_statement(alias));
+  static_assert(!is_simple_declaration(alias));
+  constexpr info binding = statements_of(body_of(^^f))[1];
+  static_assert(is_declaration_statement(binding));
+  static_assert(!is_simple_declaration(binding));
+  // declarators_of skips what isn't a simple declarator, so a binding has
+  // none (rather than the unnamed variable that holds `p`).
+  static_assert(declarators_of(binding).size() == 0);
+  static_assert(declarators_of(alias).size() == 0);
+  // An expression statement isn't a declaration at all.
+  static_assert(!is_simple_declaration(
+      statements_of(body_of(^^test_expr_child::g))[0]));
+}
+
+// --- has_body --------------------------------------------------------------
+
+// has_body is true exactly where body_of applies: for a function defined
+// with a body, instantiating a template specialization first.
+namespace test_has_body {
+  double defined(double x) { return x; }
+  double declared_only(double x);
+  double deleted(double) = delete;
+  struct S {
+    double v;
+    bool operator==(const S&) const = default;
+  };
+  template <typename T> T tmpl(T x) { return x; }
+  template <typename T> T declared_tmpl(T x);
+  int var;
+
+  static_assert(has_body(^^defined));
+  static_assert(is_compound_statement(body_of(^^defined)));
+  static_assert(!has_body(^^declared_only));
+  static_assert(!has_body(^^deleted));
+  static_assert(!has_body(^^S::operator==));
+  static_assert(has_body(^^tmpl<double>));
+  static_assert(is_compound_statement(body_of(^^tmpl<float>)));
+  static_assert(!has_body(^^declared_tmpl<double>));
+  // Not a function: a template, a variable, a type, a statement, null.
+  static_assert(!has_body(^^tmpl));
+  static_assert(!has_body(^^var));
+  static_assert(!has_body(^^S));
+  static_assert(!has_body(body_of(^^defined)));
+  static_assert(!has_body(info{}));
+}
+
+
 int main() {}
