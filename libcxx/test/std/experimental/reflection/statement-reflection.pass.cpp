@@ -364,5 +364,29 @@ namespace test_has_body {
   static_assert(!has_body(info{}));
 }
 
+// A null statement is an expression statement with no expression [stmt.expr].
+namespace null_statement {
+double f_null(double x) { ; return x; }
+double f_two(double x) { ;; return x; }
+double f_end(double x) { return x; ; }
+double f_block(double x) { { ; } return x; }
+template <class T> T t_null(T x) { ; return x; }
+
+consteval bool null_p(info s) {
+  return is_statement(s) && is_expression_statement(s) &&
+         !is_declaration_statement(s) && !is_return_statement(s) &&
+         !is_compound_statement(s);
+}
+
+static_assert(statements_of(body_of(^^f_null)).size() == 2);
+static_assert(null_p(statements_of(body_of(^^f_null))[0]));
+static_assert(is_return_statement(statements_of(body_of(^^f_null))[1]));
+static_assert(statements_of(body_of(^^f_two)).size() == 3);
+static_assert(null_p(statements_of(body_of(^^f_two))[1]));
+static_assert(null_p(statements_of(body_of(^^f_end))[1]));
+static_assert(null_p(statements_of(statements_of(body_of(^^f_block))[0])[0]));
+static_assert(null_p(statements_of(body_of(^^t_null<double>))[0]));
+} // namespace null_statement
+
 
 int main() {}
