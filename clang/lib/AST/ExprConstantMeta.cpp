@@ -8400,7 +8400,9 @@ bool statement_kind_of(APValue &Result, ASTContext &C, MetaActions &Meta,
   // stmt_kind values: compound=0, decl=1, return_=2, expression=3,
   // if_=4, for_=5, while_=6, other=7, range_for_=8.
   size_t Kind;
-  if (isa<Expr>(S)) {
+  // A null statement is an expression statement with no expression
+  // ([stmt.expr]).
+  if (isa<Expr>(S) || isa<NullStmt>(S)) {
     Kind = 3; // expression
   } else {
     switch (S->getStmtClass()) {
@@ -8591,7 +8593,7 @@ bool expression_of(APValue &Result, ASTContext &C, MetaActions &Meta,
   auto *E = dyn_cast<Expr>(RV.getReflectedStatement());
   if (!E) {
     Diagnoser(Range.getBegin(), diag::metafn_expected_reflection_of)
-        << "an expression statement" << Range;
+        << "an expression statement with an expression" << Range;
     return true;
   }
 
