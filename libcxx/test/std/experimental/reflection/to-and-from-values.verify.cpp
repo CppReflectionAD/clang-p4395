@@ -37,6 +37,42 @@ constexpr auto v2 = std::meta::reflect_constant(htmp);
 
 }  // namespace disallowed_results
 
+                          // ======================
+                          // extract_non_structural
+                          // ======================
+
+namespace extract_non_structural {
+// A private data member makes a class non-structural.
+class NonStructural {
+  int v = 1;
+public:
+  constexpr int get() const { return v; }
+};
+constexpr NonStructural var;
+
+// By reference, 'extract' needs no structural type.
+static_assert(std::meta::extract<const NonStructural &>(^^var).get() == 1);
+
+// By value, 'extract' is 'extract-value<T>(constant_of(r))', and 'constant_of'
+// mandates a structural type.
+constexpr int v1 = std::meta::extract<NonStructural>(^^var).get();
+  // expected-error@-1 {{must be initialized by a constant expression}} \
+  // expected-note@-1 {{values of non-structural type}}
+
+constexpr int v2 = std::meta::extract<NonStructural>(
+                       std::meta::reflect_object(var)).get();
+  // expected-error@-2 {{must be initialized by a constant expression}} \
+  // expected-note@-2 {{values of non-structural type}}
+
+consteval int fromLocal() {
+  [[maybe_unused]] NonStructural local;
+  return std::meta::extract<NonStructural>(^^local).get();
+    // expected-note@-1 {{values of non-structural type}}
+}
+constexpr int v3 = fromLocal();
+  // expected-error@-1 {{must be initialized by a constant expression}}
+}  // namespace extract_non_structural
+
                               // ================
                               // self_referential
                               // ================

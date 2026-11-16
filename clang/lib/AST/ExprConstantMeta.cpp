@@ -4032,6 +4032,13 @@ bool extract(APValue &Result, ASTContext &C, MetaActions &Meta,
       return Diagnoser(Range.getBegin(), diag::metafn_extract_type_mismatch)
           << 1 << ObjectTy << ReturnsLValue << ResultTy << Range;
 
+    // By value, 'extract' is 'extract-value<T>(constant_of(r))', and
+    // 'constant_of' goes through 'reflect_constant', which mandates a
+    // structural type.
+    if (!ReturnsLValue && !ObjectTy->isStructuralType())
+      return Diagnoser(Range.getBegin(), diag::metafn_value_not_structural_type)
+          << ObjectTy << Range;
+
     Expr *OVE = new (C) OpaqueValueExpr(Range.getBegin(), ObjectTy, VK_LValue);
     Expr *CE = ConstantExpr::Create(C, OVE, RV.getReflectedObject());
 
@@ -4132,6 +4139,12 @@ bool extract(APValue &Result, ASTContext &C, MetaActions &Meta,
             Decl->getType().getCanonicalType().getTypePtr())
           return Diagnoser(Range.getBegin(), diag::metafn_extract_type_mismatch)
               << 0 << Decl->getType() << ReturnsLValue << ResultTy << Range;
+
+        // As for an object: by value, 'extract' needs a structural type.
+        if (!ReturnsLValue && !Decl->getType()->isStructuralType())
+          return Diagnoser(Range.getBegin(),
+                           diag::metafn_value_not_structural_type)
+              << Decl->getType() << Range;
 
         Synthesized = ExtractLValueExpr::Create(C, Range, ResultTy, Decl);
       }
